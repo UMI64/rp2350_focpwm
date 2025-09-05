@@ -1,74 +1,58 @@
-#include <stdio.h>
-#include "pico/stdlib.h"
-#include "pico/multicore.h"
-#include "hardware/pio.h"
-#include "hardware/timer.h"
+#include "focpwm.hpp"
+#include "hardware/pwm.h"
 #include "hardware/clocks.h"
-#include "FreeRTOS.h"
-#include "task.h"
-
-#include "blink.pio.h"
-
-void blink_pin_forever(PIO pio, uint sm, uint offset, uint pin, uint freq)
+#define BIT(x) (1ul << (x))
+focpwm::focpwm(uint32_t pin_a, uint32_t pin_b, uint32_t pin_c, uint32_t count, uint32_t freq)
 {
-    blink_program_init(pio, sm, offset, pin);
-    pio_sm_set_enabled(pio, sm, true);
-
-    printf("Blinking pin %d at %d Hz\n", pin, freq);
-
-    // PIO counter program takes 3 more cycles in total than we pass as
-    // input (wait for n + 1; mov; jmp)
-    pio->txf[sm] = (125000000 / (2 * freq)) - 3;
+    init_pwm_hard(&pwm_hard_a, pin_a, count, freq);
+    init_pwm_hard(&pwm_hard_b, pin_b, count, freq);
+    init_pwm_hard(&pwm_hard_c, pin_c, count, freq);
+    slice_mask = BIT(pwm_hard_a.slice_num) | BIT(pwm_hard_b.slice_num) | BIT(pwm_hard_c.slice_num);
+}
+focpwm::~focpwm()
+{
+    pwm_set_mask_enabled(~slice_mask);
 }
 
-int64_t alarm_callback(alarm_id_t id, void *user_data)
+void focpwm::start()
 {
-    // Put your timeout handler code in here
-    return 0;
+    pwm_set_mask_enabled(slice_mask);
+}
+void focpwm::stop()
+{
+    pwm_set_mask_enabled(~slice_mask);
+}
+void focpwm::set_freq(uint32_t freq)
+{
+    pwm_set_clkdiv(pwm_hard_a.slice_num, 0.1f);
+    pwm_set_clkdiv(pwm_hard_b.slice_num, 0.1f);
+    pwm_set_clkdiv(pwm_hard_c.slice_num, 0.1f);
+    pwm_set_wrap(pwm_hard_a.slice_num, freq);
+    pwm_set_wrap(pwm_hard_b.slice_num, freq);
+    pwm_set_wrap(pwm_hard_c.slice_num, freq);
+}
+void focpwm::set_duty(uint16_t duty_a, uint16_t duty_b, uint16_t duty_c)
+{
+    pwm_set_chan_level(pwm_hard_a.slice_num, pwm_hard_a.channel_num, duty_a);
+    pwm_set_chan_level(pwm_hard_b.slice_num, pwm_hard_b.channel_num, duty_b);
+    pwm_set_chan_level(pwm_hard_c.slice_num, pwm_hard_c.channel_num, duty_c);
+}
+void focpwm::set_pin(uint32_t pin, uint16_t level)
+{
+    pwm_set_gpio_level(pin, level);
 }
 
-void main_task(__unused void *params)
+void focpwm::init_pwm_hard(pwm_hard_t *pwm_hard, uint32_t gpio, uint32_t count, uint32_t freq)
 {
-    while (true)
-    {
-        printf("Hello, world!\n");
-        vTaskDelay(3000);
-    }
-}
-
-void vLaunch(void)
-{
-#define MAIN_TASK_STACK_SIZE (256)
-#define MAIN_TASK_PRIORITY (tskIDLE_PRIORITY + 1)
-        TaskHandle_t task;
-
-    static StackType_t main_stack[MAIN_TASK_STACK_SIZE];
-    static StaticTask_t main_buf;
-    task = xTaskCreateStatic(main_task, "MainThread", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, main_stack, &main_buf);
-
-    // static_assert(configSUPPORT_DYNAMIC_ALLOCATION, "");
-    // xTaskCreate(main_task, "MainThread", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, &task);
-    vTaskCoreAffinitySet(task, 1);
-
-    vTaskStartScheduler();
-}
-
-int main()
-{
-    stdio_init_all();
-
-    // PIO Blinking example
-    PIO pio = pio0;
-    uint offset = pio_add_program(pio, &blink_program);
-    printf("Loaded program at %d\n", offset);
-    blink_pin_forever(pio, 0, offset, 6, 3);
-    // Timer example code - This example fires off the callback after 2000ms
-    add_alarm_in_ms(2000, alarm_callback, NULL, false);
-    // For more examples of timer use see https://github.com/raspberrypi/pico-examples/tree/master/timer
-
-    printf("System Clock Frequency is %d Hz\n", clock_get_hz(clk_sys));
-    printf("USB Clock Frequency is %d Hz\n", clock_get_hz(clk_usb));
-    // For more examples of clocks use see https://github.com/raspberrypi/pico-examples/tree/master/clocks
-
-    vLaunch();
+    pwm_hard->gpio = gpio;
+    pwm_hard->slice_num = pwm_gpio_to_slice_num(gpio);
+    pwm_hard->channel_num = pwm_gpio_to_channel(gpio);
+    pwm_hard->div = (float)clock_get_hz(clk_sys) / freq;
+    pwm_hard->count = count;
+    gpio_set_function(gpio, GPIO_FUNC_PWM);
+    pwm_config c = pwm_get_default_config();
+    pwm_config_set_clkdiv(&c, pwm_hard->div);
+    pwm_config_set_wrap(&c, pwm_hard->count);
+    pwm_config_set_phase_correct(&c, true);
+    pwm_init(pwm_hard->slice_num, &c, false);
 }
