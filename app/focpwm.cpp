@@ -2,11 +2,13 @@
 #include "hardware/pwm.h"
 #include "hardware/clocks.h"
 #define BIT(x) (1ul << (x))
-focpwm::focpwm(uint32_t pin_a, uint32_t pin_b, uint32_t pin_c, uint32_t count, uint32_t freq)
+focpwm::focpwm(uint32_t pin_a, uint32_t pin_b, uint32_t pin_c, uint16_t top, uint32_t freq)
 {
-    init_pwm_hard(&pwm_hard_a, pin_a, count, freq);
-    init_pwm_hard(&pwm_hard_b, pin_b, count, freq);
-    init_pwm_hard(&pwm_hard_c, pin_c, count, freq);
+    irq_set_exclusive_handler(PWM_IRQ_WRAP_1, irq_handler);
+    irq_set_enabled(PWM_IRQ_WRAP_1, true);
+    init_pwm_hard(&pwm_hard_a, pin_a, top, freq);
+    init_pwm_hard(&pwm_hard_b, pin_b, top, freq);
+    init_pwm_hard(&pwm_hard_c, pin_c, top, freq);
     slice_mask = BIT(pwm_hard_a.slice_num) | BIT(pwm_hard_b.slice_num) | BIT(pwm_hard_c.slice_num);
 }
 focpwm::~focpwm()
@@ -22,15 +24,6 @@ void focpwm::stop()
 {
     pwm_set_mask_enabled(~slice_mask);
 }
-void focpwm::set_freq(uint32_t freq)
-{
-    pwm_set_clkdiv(pwm_hard_a.slice_num, 0.1f);
-    pwm_set_clkdiv(pwm_hard_b.slice_num, 0.1f);
-    pwm_set_clkdiv(pwm_hard_c.slice_num, 0.1f);
-    pwm_set_wrap(pwm_hard_a.slice_num, freq);
-    pwm_set_wrap(pwm_hard_b.slice_num, freq);
-    pwm_set_wrap(pwm_hard_c.slice_num, freq);
-}
 void focpwm::set_duty(uint16_t duty_a, uint16_t duty_b, uint16_t duty_c)
 {
     pwm_set_chan_level(pwm_hard_a.slice_num, pwm_hard_a.channel_num, duty_a);
@@ -42,17 +35,26 @@ void focpwm::set_pin(uint32_t pin, uint16_t level)
     pwm_set_gpio_level(pin, level);
 }
 
-void focpwm::init_pwm_hard(pwm_hard_t *pwm_hard, uint32_t gpio, uint32_t count, uint32_t freq)
+void focpwm::init_pwm_hard(pwm_hard_t *pwm_hard, uint32_t gpio, uint16_t top, uint32_t freq)
 {
     pwm_hard->gpio = gpio;
     pwm_hard->slice_num = pwm_gpio_to_slice_num(gpio);
     pwm_hard->channel_num = pwm_gpio_to_channel(gpio);
     pwm_hard->div = (float)clock_get_hz(clk_sys) / freq;
-    pwm_hard->count = count;
+    pwm_hard->div = pwm_hard->div > 256 ? 256 : pwm_hard->div;
+    pwm_hard->top = top;
+    period = (float)top / freq * 2 * 1000000;
+    frequency = (float)clock_get_hz(clk_sys) / pwm_hard->div / top / 2;
     gpio_set_function(gpio, GPIO_FUNC_PWM);
+    pwm_clear_irq(pwm_hard->slice_num);
+    pwm_irqn_set_slice_enabled(PWM_IRQ_WRAP_1, pwm_hard->slice_num, true);
     pwm_config c = pwm_get_default_config();
     pwm_config_set_clkdiv(&c, pwm_hard->div);
-    pwm_config_set_wrap(&c, pwm_hard->count);
+    pwm_config_set_wrap(&c, pwm_hard->top);
     pwm_config_set_phase_correct(&c, true);
     pwm_init(pwm_hard->slice_num, &c, false);
+}
+
+void focpwm::irq_handler(void)
+{
 }

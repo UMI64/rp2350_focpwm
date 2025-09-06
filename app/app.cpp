@@ -17,28 +17,30 @@ int64_t alarm_callback(alarm_id_t id, void *user_data)
 
 void main_task(__unused void *params)
 {
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    focpwm pwm(25, 26, 27, 10000, 10000); // 10KHz 0.1ms 10K count, 0.1 * 10000 = 1000ms
-    pwm.set_duty(5000, 2000, 3000);
-    pwm.set_pin(25, 1);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    pwm.set_pin(25, 0);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    pwm.set_pin(25, 1);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    pwm.set_pin(25, 0);
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    gpio_init(25);
+    gpio_set_dir(25, GPIO_OUT);
+    gpio_put(25, 1);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_put(25, 0);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_put(25, 1);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    gpio_put(25, 0);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    // focpwm pwm(25, 26, 27, 50000, 1 * MHZ); // 1MHz 1us, 50K top, p = 1 * 50000 = 50ms
+    focpwm pwm(25, 26, 27, 2500, 50 * MHZ); // 50MHz 0.02us, 2.5K top, p = 2 * 0.02 * 2500 = 100us, f = 10KHz
+    pwm.set_duty(500, 200, 201);
     pwm.start();
     auto printinfo = [&](focpwm::pwm_hard_t &pwm_hard)
     {
-        printf("slice %lu channel %lu div %0.6f, count %lu\n", pwm_hard.slice_num, pwm_hard.channel_num, pwm_hard.div, pwm_hard.count);
+        printf("slice %lu channel %lu div %0.6f, top %lu\n", pwm_hard.slice_num, pwm_hard.channel_num, pwm_hard.div, pwm_hard.top);
     };
     while (true)
     {
         printinfo(pwm.pwm_hard_a);
         printinfo(pwm.pwm_hard_b);
-        printinfo(pwm.pwm_hard_c);
-        printf("Hello, world!\n");
+        printinfo(pwm.pwm_hard_c); 
+        printf("frequency %0.2f Hz period %0.2f us\n",pwm.frequency,pwm.period);
         vTaskDelay(3000);
     }
 }
